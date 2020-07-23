@@ -2225,7 +2225,6 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		unsigned long, arg4, unsigned long, arg5)
 {
 	struct task_struct *me = current;
-	struct task_struct *tsk;
 	unsigned char comm[sizeof(me->comm)];
 	long error;
 
@@ -2371,26 +2370,6 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 	case PR_GET_TID_ADDRESS:
 		error = prctl_get_tid_address(me, (int __user **)arg2);
 		break;
-	case PR_SET_TIMERSLACK_PID:
-		if (task_pid_vnr(current) != (pid_t)arg3 &&
-				!capable(CAP_SYS_NICE))
-			return -EPERM;
-		rcu_read_lock();
-		tsk = find_task_by_vpid((pid_t)arg3);
-		if (tsk == NULL) {
-			rcu_read_unlock();
-			return -EINVAL;
-		}
-		get_task_struct(tsk);
-		rcu_read_unlock();
-		if (arg2 <= 0)
-			tsk->timer_slack_ns =
-				tsk->default_timer_slack_ns;
-		else
-			tsk->timer_slack_ns = arg2;
-		put_task_struct(tsk);
-		error = 0;
-		break;
 	case PR_SET_CHILD_SUBREAPER:
 		me->signal->is_child_subreaper = !!arg2;
 		break;
@@ -2416,7 +2395,8 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 	case PR_SET_THP_DISABLE:
 		if (arg3 || arg4 || arg5)
 			return -EINVAL;
-		down_write(&me->mm->mmap_sem);
+		if (down_write_killable(&me->mm->mmap_sem))
+			return -EINTR;
 		if (arg2)
 			me->mm->def_flags |= VM_NOHUGEPAGE;
 		else
@@ -2605,3 +2585,28 @@ COMPAT_SYSCALL_DEFINE1(sysinfo, struct compat_sysinfo __user *, info)
 	return 0;
 }
 #endif /* CONFIG_COMPAT */
+SYSCALL_DEFINE2(GPU_AWARE,  bool*, C_Mmode, unsigned int, total_work)
+{
+	current->IsGPUKernel = true;
+	current->total_work = total_work;
+	current->C_Mmode_queue = (bool*)malloc(total_work * sizeof(bool));
+	for (unsigned int i = 0; i <= total_work-1; i++)
+	{
+		current->C_Mmode_queue[i] = C_Mmode[i];
+	}
+	current->exe_position = 0;
+	return 0;
+}
+SYSCALL_DEFINE1(GPU_EXED, unsigned int, position)
+{
+	if (position <= total_work - 1 && position > current->exe_position )
+	{
+		current->exe_position = position;
+    }
+	return 0;
+}
+SYSCALL_DEFINE0(GPU_END)
+{
+	free(current->C_Mmode_queue);
+	return 0;
+}
